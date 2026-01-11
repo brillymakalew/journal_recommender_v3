@@ -79,20 +79,35 @@ def ingest():
 
     # --- PROCESS JOURNALS (Main Cost Center) ---
     print("Processing Journals...")
+    journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
     journals_json_path = os.path.join(OUTPUT_DIR, "journals.json")
+    
     existing_journals = {}
     
-    # 1. Load Existing Data (Smart Resume)
-    if os.path.exists(journals_json_path):
-        print("Loading existing journals to resume...")
+    # 1. Load Existing Data from JSONL (Preferred for Resume)
+    if os.path.exists(journals_jsonl_path):
+        print(f"Loading existing progress from {journals_jsonl_path}...")
+        try:
+            with open(journals_jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            record = json.loads(line)
+                            existing_journals[record['name']] = record
+                        except: pass
+            print(f"Loaded {len(existing_journals)} existing records.")
+        except Exception as e:
+            print(f"Error reading JSONL: {e}")
+
+    # Fallback to JSON if JSONL empty/missing
+    if not existing_journals and os.path.exists(journals_json_path):
+        print("Loading existing journals from legacy JSON...")
         with open(journals_json_path, "r", encoding="utf-8") as f:
             try:
                 loaded = json.load(f)
-                # Map by Journal Name to avoid duplicates or re-embedding
                 for item in loaded:
                     existing_journals[item['name']] = item
-            except:
-                print("Could not read existing json, starting fresh.")
+            except: pass
 
     # 1.5 Load ASJC Mapping
     asjc_map = {}
@@ -100,7 +115,6 @@ def ingest():
     if os.path.exists(asjc_path_file):
         print("Loading ASJC mapping...")
         df_asjc = pd.read_excel(asjc_path_file)
-        # Assuming columns: Code, Description
         for _, r in df_asjc.iterrows():
             code = str(r['Code']).strip()
             desc = str(r['Description']).strip() 
@@ -109,66 +123,48 @@ def ingest():
     # 2. Load Excel Data
     journals_path = os.path.join(RESOURCES_DIR, JOURNALS_FILE)
     if os.path.exists(journals_path):
-        # Update columns to include new fields
         df_journals = pd.read_excel(journals_path, usecols=[
-            'Source Title', 
-            'scope', 
-            'All Science Journal Classification Codes (ASJC)', 
-            'Publisher', 
-            'Sourcerecord ID', 
-            'Active or Inactive',
-            'Coverage'
+            'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
+            'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
         ])
         df_journals = df_journals.dropna(subset=['Source Title'])
         
-        final_list = []
-        to_embed = [] # List of { index, text } to preserve order mapping
+        # We process in order
+        pending_records = [] 
+        final_list = [] # Keep track of everything for final JSON dump if needed
         
         print(f"Total rows in Excel: {len(df_journals)}")
-        
-        current_idx = 0
-        skipped_count = 0
         
         for _, row in df_journals.iterrows():
             title = row['Source Title']
             
-            # Prepare new record fields
+            # If we already have it fully processed (with embedding), skip expensive logic
+            if title in existing_journals and "embedding" in existing_journals[title]:
+                final_list.append(existing_journals[title])
+                continue
+
+            # ... Otherwise, prepare for processing ...
             scope = str(row['scope']) if pd.notna(row['scope']) else ""
-            
-            # ASJC Processing
             raw_asjc = str(row['All Science Journal Classification Codes (ASJC)']) if pd.notna(row['All Science Journal Classification Codes (ASJC)']) else ""
-            # ASJC codes usually separated by semi-colon or comma. Let's try both.
-            # E.g. "1200; 1305"
             asjc_codes = [c.strip() for c in raw_asjc.replace(',', ';').split(';') if c.strip()]
             asjc_descs = [asjc_map.get(c, c) for c in asjc_codes]
-            asjc_final = "; ".join(asjc_descs) # E.g. "Arts and Humanities; Biochemistry"
+            asjc_final = "; ".join(asjc_descs)
             
             publisher = str(row['Publisher']) if pd.notna(row['Publisher']) else "Unknown Publisher"
             source_id = str(row['Sourcerecord ID']) if pd.notna(row['Sourcerecord ID']) else ""
-            
-            # Coverage Processing
             active_status = str(row['Active or Inactive']) if pd.notna(row['Active or Inactive']) else "Unknown"
             years = str(row['Coverage']) if pd.notna(row['Coverage']) else ""
             coverage = f"{active_status} ({years})" if years else active_status
-
-            # Construct Link
             link = f"https://www.scopus.com/sourceid/{source_id}" if source_id else ""
 
-            # Optimization: limit scope length
             if len(scope) > 4000:
                 scope = scope[:4000] + "..."
             
             content = f"{title}. {scope}. matches ASJC codes: {asjc_final}".strip()
             
-            # Check if embedding exists
-            embedding = None
-            if title in existing_journals and "embedding" in existing_journals[title]:
-                 embedding = existing_journals[title]["embedding"]
-                 skipped_count += 1
-            
-            # Allow reusing ID if existed, else new ID
+            # Reuse ID if possible
             rec_id = existing_journals[title]['id'] if title in existing_journals else str(uuid.uuid4())
-            
+
             record = {
                 "id": rec_id,
                 "name": title,
@@ -179,67 +175,69 @@ def ingest():
                 "coverage": coverage,
                 "asjc": asjc_final
             }
+            
+            pending_records.append(record)
 
-            if embedding:
-                record["embedding"] = embedding
-            
-            final_list.append(record)
-            
-            # Mark for embedding ONLY if missing
-            if not embedding:
-                to_embed.append({
-                    "index": len(final_list) - 1,
-                    "text": content
-                })
+        print(f"Already processed: {len(final_list)}")
+        print(f"Pending processing: {len(pending_records)}")
         
-        print(f"Skipped {skipped_count} already embedded journals.")
+        # 3. Process Pending in Batches & SAVE INCREMENTALLY
+        # Smaller batch size for better resume capability
+        RESUME_BATCH_SIZE = 100 
         
-        # 3. Batch Embed New Items
-        if os.getenv("OPENAI_API_KEY") and to_embed:
-            # Estimate cost: approx 1 token per 4 chars. 
-            total_chars = sum([len(x['text']) for x in to_embed])
-            est_tokens = total_chars / 4
-            est_cost = (est_tokens / 1_000_000) * 0.02
-            print(f"Ready to embed {len(to_embed)} journals.")
-            print(f"Estimated tokens: {int(est_tokens)}. Estimated cost: ${est_cost:.4f}")
-            
-            embeddings_map = get_embeddings_batched_safe(to_embed, EMBEDDING_MODEL)
-            
-            # Apply back to final_list
-            for idx, emb in embeddings_map.items():
-                final_list[idx]["embedding"] = emb
-            
-            # Save Updated Data
-            print("Saving updated journals.json...")
-            with open(journals_json_path, "w", encoding="utf-8") as f:
-                json.dump(final_list, f)
+        if os.getenv("OPENAI_API_KEY") and pending_records:
+            total_pending = len(pending_records)
+            for i in range(0, total_pending, RESUME_BATCH_SIZE):
+                batch = pending_records[i : i + RESUME_BATCH_SIZE]
                 
-            print("Saving updated journals.jsonl...")
-            journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
-            with open(journals_jsonl_path, "w", encoding="utf-8") as f:
-                for item in final_list:
-                    f.write(json.dumps(item) + "\n")
-            
-            print("Done.")
-            
+                # Prepare text map for embedding function
+                to_embed_map = [{"index": idx, "text": item["content"]} for idx, item in enumerate(batch)]
+                
+                try:
+                    # Call OpenAI
+                    print(f"Embedding batch {i} to {i+len(batch)} of {total_pending}...")
+                    embeddings = get_embeddings_batched_safe(to_embed_map, EMBEDDING_MODEL)
+                    
+                    # Assign embeddings
+                    valid_batch = []
+                    for idx, emb in embeddings.items():
+                        batch[idx]["embedding"] = emb
+                        valid_batch.append(batch[idx])
+                    
+                    # APPEND TO JSONL IMMEDIATELY (Checkpoint)
+                    if valid_batch:
+                        with open(journals_jsonl_path, "a", encoding="utf-8") as f:
+                            for item in valid_batch:
+                                f.write(json.dumps(item) + "\n")
+                        print(f"Saved {len(valid_batch)} new records to {journals_jsonl_path}")
+                        
+                        # Add to final list in memory
+                        final_list.extend(valid_batch)
+                        
+                except Exception as e:
+                    print(f"CRITICAL ERROR in batch {i}: {e}")
+                    print("Waiting 10s before retry loop continues...")
+                    time.sleep(10)
         else:
-            if not os.getenv("OPENAI_API_KEY"):
-                print("No API Key found. Saving without embeddings.")
-            else:
-                print("Nothing new to embed.")
-            
-            # Save JSON (Legacy/Backup)
-            print("Saving updated journals.json...")
+            # No API key or no pending -> Just dump text data if needed
+            if pending_records:
+                print("No API Key or Dry Run: Saving pending records without embeddings.")
+                with open(journals_jsonl_path, "a", encoding="utf-8") as f:
+                    for item in pending_records:
+                        final_list.append(item)
+                        f.write(json.dumps(item) + "\n")
+
+        # Optional: update the full JSON for backup (reconstruct from all processed)
+        # Note: If we really want to keep json and jsonl in sync, we should re-read jsonl or dump final_list
+        # But for huge files, maybe skip JSON dump? User asked for robust ingest.
+        # Let's dump it if it fits in memory (which final_list does).
+        try:
+            print("Syncing journals.json (Backup)...")
             with open(journals_json_path, "w", encoding="utf-8") as f:
                 json.dump(final_list, f)
-            
-            # Save JSONL (Production - Streaming)
-            print("Saving updated journals.jsonl...")
-            journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
-            with open(journals_jsonl_path, "w", encoding="utf-8") as f:
-                for item in final_list:
-                    f.write(json.dumps(item) + "\n")
-            print("Done.")
+            print("Sync Complete.")
+        except Exception as e:
+            print(f"Warning: Could not save full legacy JSON: {e}")
 
     else:
         print(f"File not found: {journals_path}")
