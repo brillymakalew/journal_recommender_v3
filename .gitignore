@@ -39,3 +39,24 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.gemini/
+
+# Web App Specific
+web/node_modules/
+web/.next/
+web/.env*
+web/data/*.json
+web/data/*.jsonl
+web/data/*.csv
+
+# Large Files / Generated Data
+*.jsonl
+resources/generated/
+
