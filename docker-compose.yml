@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  app:
+    container_name: journal-recommender
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - ./web/.env
+    restart: always
+
+    # Persist data and mount huge files to avoid build context overhead
+    volumes:
+      - ./web/data:/app/data
