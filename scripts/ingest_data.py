@@ -213,6 +213,13 @@ def ingest():
             print("Saving updated journals.json...")
             with open(journals_json_path, "w", encoding="utf-8") as f:
                 json.dump(final_list, f)
+                
+            print("Saving updated journals.jsonl...")
+            journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
+            with open(journals_jsonl_path, "w", encoding="utf-8") as f:
+                for item in final_list:
+                    f.write(json.dumps(item) + "\n")
+            
             print("Done.")
             
         else:
@@ -221,9 +228,18 @@ def ingest():
             else:
                 print("Nothing new to embed.")
             
-            # Save anyway to sync new excel rows if any
+            # Save JSON (Legacy/Backup)
+            print("Saving updated journals.json...")
             with open(journals_json_path, "w", encoding="utf-8") as f:
                 json.dump(final_list, f)
+            
+            # Save JSONL (Production - Streaming)
+            print("Saving updated journals.jsonl...")
+            journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
+            with open(journals_jsonl_path, "w", encoding="utf-8") as f:
+                for item in final_list:
+                    f.write(json.dumps(item) + "\n")
+            print("Done.")
 
     else:
         print(f"File not found: {journals_path}")
