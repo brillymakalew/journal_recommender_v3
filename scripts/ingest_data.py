@@ -7,8 +7,11 @@ from dotenv import load_dotenv
 import time
 
 # Resolve .env path relative to this script or CWD
+# Resolve .env path relative to this script or CWD
 BASE_DIR = os.getcwd()
 ENV_PATH = os.path.join(BASE_DIR, 'web', '.env')
+if not os.path.exists(ENV_PATH):
+    ENV_PATH = os.path.join(BASE_DIR, '.env')
 load_dotenv(ENV_PATH)
 
 # Configuration

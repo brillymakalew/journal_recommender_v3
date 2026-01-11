@@ -10,6 +10,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=4096
     env_file:
       - ./web/.env
     restart: always
@@ -17,3 +18,5 @@ services:
     # Persist data and mount huge files to avoid build context overhead
     volumes:
       - ./web/data:/app/data
+      - ./scripts:/app/scripts
+      - ./resources:/app/resources
