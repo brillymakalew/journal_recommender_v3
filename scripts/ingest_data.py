@@ -86,9 +86,9 @@ def ingest():
     journals_jsonl_path = os.path.join(OUTPUT_DIR, "journals.jsonl")
     journals_json_path = os.path.join(OUTPUT_DIR, "journals.json")
     
-    existing_journals = {}
-    
     # 1. Load Existing Data from JSONL (Preferred for Resume)
+    existing_names = set()
+    
     if os.path.exists(journals_jsonl_path):
         print(f"Loading existing progress from {journals_jsonl_path}...", flush=True)
         try:
@@ -96,22 +96,18 @@ def ingest():
                 for line in f:
                     if line.strip():
                         try:
+                            # OPTIMIZATION: Only parse the name, don't keep full object in RAM
+                            # We search for "name": "..." manually or use json.loads but drop result immediately
                             record = json.loads(line)
-                            existing_journals[record['name']] = record
+                            if 'name' in record:
+                                existing_names.add(record['name'])
                         except: pass
-            print(f"Loaded {len(existing_journals)} existing records.", flush=True)
+            print(f"Loaded {len(existing_names)} existing records (Names only).", flush=True)
         except Exception as e:
             print(f"Error reading JSONL: {e}", flush=True)
 
-    # Fallback to JSON if JSONL empty/missing
-    if not existing_journals and os.path.exists(journals_json_path):
-        print("Loading existing journals from legacy JSON...", flush=True)
-        with open(journals_json_path, "r", encoding="utf-8") as f:
-            try:
-                loaded = json.load(f)
-                for item in loaded:
-                    existing_journals[item['name']] = item
-            except: pass
+    # Fallback checking is less critical now, assuming JSONL is primary
+
 
     # 1.5 Load ASJC Mapping
     asjc_map = {}
@@ -237,8 +233,8 @@ def ingest():
 
             
             # If we already have it fully processed (with embedding), skip expensive logic
-            if title in existing_journals and "embedding" in existing_journals[title]:
-                final_list.append(existing_journals[title])
+            if title in existing_names:
+                # We do NOT append to final_list to save memory
                 continue
 
             # ... Otherwise, prepare for processing ...
@@ -332,35 +328,32 @@ def ingest():
                         with open(journals_jsonl_path, "a", encoding="utf-8") as f:
                             for item in valid_batch:
                                 f.write(json.dumps(item) + "\n")
-                        print(f"Saved {len(valid_batch)} new records to {journals_jsonl_path}")
+                        print(f"Saved {len(valid_batch)} new records to {journals_jsonl_path} (Append-only)")
                         
-                        # Add to final list in memory
-                        final_list.extend(valid_batch)
+                        # RAM OPTIMIZATION: Do not keep valid_batch in memory
+                        # final_list.extend(valid_batch) 
                         
                 except Exception as e:
-                    print(f"CRITICAL ERROR in batch {i}: {e}")
-                    print("Waiting 10s before retry loop continues...")
+                    print(f"CRITICAL ERROR in batch {i}: {e}", flush=True)
+                    print("Waiting 10s before retry loop continues...", flush=True)
                     time.sleep(10)
         else:
             # No API key or no pending -> Just dump text data if needed
             if pending_records:
-                print("No API Key or Dry Run: Saving pending records without embeddings.")
+                print("No API Key or Dry Run: Saving pending records without embeddings.", flush=True)
                 with open(journals_jsonl_path, "a", encoding="utf-8") as f:
                     for item in pending_records:
-                        final_list.append(item)
                         f.write(json.dumps(item) + "\n")
 
-        # Optional: update the full JSON for backup (reconstruct from all processed)
-        # Note: If we really want to keep json and jsonl in sync, we should re-read jsonl or dump final_list
-        # But for huge files, maybe skip JSON dump? User asked for robust ingest.
-        # Let's dump it if it fits in memory (which final_list does).
-        try:
-            print("Syncing journals.json (Backup)...")
-            with open(journals_json_path, "w", encoding="utf-8") as f:
-                json.dump(final_list, f)
-            print("Sync Complete.")
-        except Exception as e:
-            print(f"Warning: Could not save full legacy JSON: {e}")
+        # Memory Optimization: Skip syncing full JSON to avoid OOM
+        # Users should use journals.jsonl
+        # try:
+        #     print("Syncing journals.json (Backup)...")
+        #     with open(journals_json_path, "w", encoding="utf-8") as f:
+        #         json.dump(final_list, f)
+        #     print("Sync Complete.")
+        # except Exception as e:
+        #     print(f"Warning: Could not save full legacy JSON: {e}")
 
     else:
         print(f"File not found: {journals_path}")
