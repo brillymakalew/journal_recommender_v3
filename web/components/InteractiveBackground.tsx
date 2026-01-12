@@ -42,23 +42,25 @@ export default function InteractiveBackground({ value, loading = false }: Intera
 
             {/* The Celestial Body */}
             <div
-                className={`absolute rounded-full transition-all duration-1000 ease-in-out flex items-center justify-center
+                className={`absolute transition-all duration-1000 ease-in-out flex items-center justify-center
                     ${theme === 'dark'
                         ? 'bg-gradient-to-br from-slate-100 to-slate-400 shadow-[0_0_60px_-10px_rgba(255,255,255,0.3)]'
                         : 'bg-gradient-to-br from-yellow-300 to-orange-500 shadow-[0_0_100px_-20px_rgba(255,165,0,0.6)]'
                     }
-                    ${loading ? 'animate-breathing scale-110' : ''}
+                    ${loading ? 'animate-fluid select-none' : 'rounded-full'}
                 `}
                 style={style}
             >
-                {/* Custom Breathing Animation */}
+                {/* Custom Fluid Animation */}
                 <style jsx>{`
-                    @keyframes breathing {
-                        0%, 100% { transform: scale(1); }
-                        50% { transform: scale(1.1); }
+                    @keyframes fluid {
+                        0% { border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; transform: scale(1); }
+                        33% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; transform: scale(1.05); }
+                        66% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; transform: scale(0.95); }
+                        100% { border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; transform: scale(1); }
                     }
-                    .animate-breathing {
-                        animation: breathing 3s ease-in-out infinite;
+                    .animate-fluid {
+                        animation: fluid 6s ease-in-out infinite;
                     }
                 `}</style>
 
@@ -67,6 +69,7 @@ export default function InteractiveBackground({ value, loading = false }: Intera
                     <div className="absolute top-[20%] right-[30%] w-[15%] h-[15%] bg-slate-300/30 rounded-full" />
                     <div className="absolute bottom-[30%] left-[20%] w-[25%] h-[25%] bg-slate-300/20 rounded-full" />
                     <div className="absolute top-[50%] right-[15%] w-[10%] h-[10%] bg-slate-300/25 rounded-full" />
+
                 </div>
 
                 {/* Loading Text */}

@@ -149,8 +149,8 @@ export default function SDGResults({ results }: SDGResultsProps) {
                             </button>
                         </div>
                         <div className="flex flex-wrap gap-2 max-h-60 overflow-y-auto">
-                            {(displayList.find(s => s.id === viewingKeywords) || allSDGs.find(s => s.id === viewingKeywords))?.keywords.map(k => (
-                                <span key={k} className="px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm">
+                            {((displayList.find(s => s.id === viewingKeywords) || allSDGs.find(s => s.id === viewingKeywords))?.keywords || []).map((k, i) => (
+                                <span key={`${k}-${i}`} className="px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm">
                                     {k}
                                 </span>
                             ))}
