@@ -137,7 +137,11 @@ async function loadDataAsync() {
         }
 
         return excludedIds;
-    })();
+    })().catch(e => {
+        console.error("Data load failed:", e);
+        loadingPromise = null; // Reset lock so we can retry
+        throw e;
+    });
 
     return loadingPromise;
 }

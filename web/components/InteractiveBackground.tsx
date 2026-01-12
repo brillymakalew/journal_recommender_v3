@@ -37,8 +37,8 @@ export default function InteractiveBackground({ value, loading = false }: Intera
 
     return (
         <div className={`absolute inset-0 pointer-events-none overflow-hidden z-0 h-screen transition-all duration-1000 ${loading ? 'z-50' : 'z-0'}`}>
-            {/* Overlay Backdrop when Loading */}
-            <div className={`absolute inset-0 bg-white/80 dark:bg-black/80 transition-opacity duration-500 ${loading ? 'opacity-100 backdrop-blur-sm' : 'opacity-0 pointer-events-none'}`} />
+            {/* Overlay Backdrop when Loading (More Subtle) */}
+            <div className={`absolute inset-0 bg-white/30 dark:bg-black/40 transition-opacity duration-500 ${loading ? 'opacity-100 backdrop-blur-[2px]' : 'opacity-0 pointer-events-none'}`} />
 
             {/* The Celestial Body */}
             <div
@@ -47,10 +47,21 @@ export default function InteractiveBackground({ value, loading = false }: Intera
                         ? 'bg-gradient-to-br from-slate-100 to-slate-400 shadow-[0_0_60px_-10px_rgba(255,255,255,0.3)]'
                         : 'bg-gradient-to-br from-yellow-300 to-orange-500 shadow-[0_0_100px_-20px_rgba(255,165,0,0.6)]'
                     }
-                    ${loading ? 'animate-pulse scale-110' : ''}
+                    ${loading ? 'animate-breathing scale-110' : ''}
                 `}
                 style={style}
             >
+                {/* Custom Breathing Animation */}
+                <style jsx>{`
+                    @keyframes breathing {
+                        0%, 100% { transform: scale(1); }
+                        50% { transform: scale(1.1); }
+                    }
+                    .animate-breathing {
+                        animation: breathing 3s ease-in-out infinite;
+                    }
+                `}</style>
+
                 {/* Moon Craters (Only visible in Dark Mode) */}
                 <div className={`absolute inset-0 transition-opacity duration-500 ${theme === 'dark' ? 'opacity-100' : 'opacity-0'}`}>
                     <div className="absolute top-[20%] right-[30%] w-[15%] h-[15%] bg-slate-300/30 rounded-full" />
