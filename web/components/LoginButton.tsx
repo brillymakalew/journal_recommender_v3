@@ -8,7 +8,7 @@ export default function LoginButton() {
             onClick={() => signIn("credentials", {
                 username: "admin",
                 password: "admin",
-                callbackUrl: "/"
+                callbackUrl: window.location.origin
             })}
             className="flex items-center gap-3 bg-emerald-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-900/20"
         >
