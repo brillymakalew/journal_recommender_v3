@@ -123,23 +123,65 @@ def ingest():
             desc = str(r['Description']).strip() 
             asjc_map[code] = desc
 
-    # 2. Load Excel Data
+    # 2. Load Excel Data (with CSV Caching)
     journals_path = os.path.join(RESOURCES_DIR, JOURNALS_FILE)
+    journals_cache_path = os.path.join(RESOURCES_DIR, "journals_cache.csv")
+    
     if os.path.exists(journals_path):
-        df_journals = pd.read_excel(journals_path, usecols=[
-            'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
-            'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
-        ])
+        print(f"Loading Journal Data from {journals_path}...")
+        
+        # Try loading from CSV cache first
+        if os.path.exists(journals_cache_path):
+            # Check modification times to ensure cache is fresh
+            if os.path.getmtime(journals_cache_path) > os.path.getmtime(journals_path):
+                print("Found cached CSV. Loading fast...")
+                try:
+                    df_journals = pd.read_csv(journals_cache_path)
+                    # Ensure strings
+                    df_journals['All Science Journal Classification Codes (ASJC)'] = df_journals['All Science Journal Classification Codes (ASJC)'].astype(str)
+                except:
+                    print("Cache load failed, falling back to Excel.")
+                    df_journals = None
+            else:
+                print("Cache outdated. Reloading from Excel...")
+                df_journals = None
+        else:
+            df_journals = None
+
+        # Fallback to Excel if no valid cache
+        if df_journals is None:
+            print("Reading Excel file (this may take a few seconds)...")
+            df_journals = pd.read_excel(journals_path, usecols=[
+                'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
+                'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
+            ])
+            # Save cache for next time
+            print("Saving CSV cache for future runs...")
+            df_journals.to_csv(journals_cache_path, index=False)
+
         df_journals = df_journals.dropna(subset=['Source Title'])
         
         # We process in order
         pending_records = [] 
         final_list = [] # Keep track of everything for final JSON dump if needed
         
-        print(f"Total rows in Excel: {len(df_journals)}")
+        print(f"Total rows to process: {len(df_journals)}")
         
-        for _, row in df_journals.iterrows():
-            title = row['Source Title']
+        # Use itertuples for faster iteration
+        for row in df_journals.itertuples(index=False):
+            title = row._0 # Source Title is first column if we rely on order, but better to be safe
+            # Pandas itertuples makes named tuples based on column names, sanitized. 
+            # 'Source Title' -> 'Source_Title'
+            
+            # Let's map dynamically to be safe or use column names if we know them
+            # The columns requested were:
+            # 'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
+            # 'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
+            
+            # Sanitized names usually replace spaces with _ and remove special chars
+            title = getattr(row, "Source_Title", "")
+            if not title: continue # Should be handled by dropna but safe check
+
             
             # If we already have it fully processed (with embedding), skip expensive logic
             if title in existing_journals and "embedding" in existing_journals[title]:
@@ -147,16 +189,41 @@ def ingest():
                 continue
 
             # ... Otherwise, prepare for processing ...
-            scope = str(row['scope']) if pd.notna(row['scope']) else ""
-            raw_asjc = str(row['All Science Journal Classification Codes (ASJC)']) if pd.notna(row['All Science Journal Classification Codes (ASJC)']) else ""
-            asjc_codes = [c.strip() for c in raw_asjc.replace(',', ';').split(';') if c.strip()]
-            asjc_descs = [asjc_map.get(c, c) for c in asjc_codes]
-            asjc_final = "; ".join(asjc_descs)
+            # Access attributes safely. Column names are sanitized by Pandas:
+            # 'scope' -> scope
+            # 'All Science Journal Classification Codes (ASJC)' -> All_Science_Journal_Classification_Codes_ASJC
+            # 'Publisher' -> Publisher
+            # 'Sourcerecord ID' -> Sourcerecord_ID
+            # 'Active or Inactive' -> Active_or_Inactive
+            # 'Coverage' -> Coverage
             
-            publisher = str(row['Publisher']) if pd.notna(row['Publisher']) else "Unknown Publisher"
-            source_id = str(row['Sourcerecord ID']) if pd.notna(row['Sourcerecord ID']) else ""
-            active_status = str(row['Active or Inactive']) if pd.notna(row['Active or Inactive']) else "Unknown"
-            years = str(row['Coverage']) if pd.notna(row['Coverage']) else ""
+            scope = str(getattr(row, "scope", ""))
+            if scope == "nan": scope = ""
+            
+            # ASJC Optimization
+            raw_asjc = str(getattr(row, "All_Science_Journal_Classification_Codes_ASJC", ""))
+            if raw_asjc == "nan": raw_asjc = ""
+            
+            asjc_final = ""
+            if raw_asjc:
+                # Optimized single-pass
+                parts = raw_asjc.replace(',', ';').split(';')
+                # Generator expression for speed
+                decoded_parts = (asjc_map.get(p.strip(), p.strip()) for p in parts if p.strip())
+                asjc_final = "; ".join(decoded_parts)
+            
+            publisher = str(getattr(row, "Publisher", "Unknown Publisher"))
+            if publisher == "nan": publisher = "Unknown Publisher"
+            
+            source_id = str(getattr(row, "Sourcerecord_ID", ""))
+            if source_id == "nan": source_id = ""
+            
+            active_status = str(getattr(row, "Active_or_Inactive", "Unknown"))
+            if active_status == "nan": active_status = "Unknown"
+            
+            years = str(getattr(row, "Coverage", ""))
+            if years == "nan": years = ""
+            
             coverage = f"{active_status} ({years})" if years else active_status
             link = f"https://www.scopus.com/sourceid/{source_id}" if source_id else ""
 
