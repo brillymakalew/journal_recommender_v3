@@ -45,7 +45,7 @@ export default function Home() {
 
     return (
         <main className="min-h-screen bg-gray-50 dark:bg-gradient-to-br dark:from-slate-900 dark:via-indigo-950 dark:to-black text-gray-900 dark:text-white p-6 md:p-12 transition-colors duration-500 relative overflow-hidden">
-            <InteractiveBackground value={topK} />
+            <InteractiveBackground value={topK} loading={loading} />
             <div className="max-w-5xl mx-auto space-y-12 relative z-10">
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-center gap-6 pt-8 animate-in fade-in slide-in-from-top-4 duration-700">

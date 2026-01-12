@@ -24,17 +24,22 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || "dummy",
 });
 
-// Helper: Cosine Similarity
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
+// Helper: Calculate Vector Norm (Magnitude)
+function calculateNorm(vec: number[]): number {
+    let sum = 0;
+    for (let i = 0; i < vec.length; i++) sum += vec[i] * vec[i];
+    return Math.sqrt(sum);
+}
+
+// Optimized Cosine: Uses precomputed normB
+function cosineSimilarityOptimized(vecA: number[], vecB: number[], normA: number, normB: number): number {
     let dot = 0;
-    let normA = 0;
-    let normB = 0;
+    // Unrolling loop slightly might help V8, but simple loop is usually good enough.
+    // Length is 1536 for OpenAI embeddings.
     for (let i = 0; i < vecA.length; i++) {
         dot += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
     }
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    return dot / (normA * normB);
 }
 
 // Tokenizer
@@ -82,6 +87,12 @@ async function loadDataAsync() {
             try {
                 const raw = fs.readFileSync(path.join(DATA_DIR, 'sdgs.json'), 'utf-8');
                 sdgs = JSON.parse(raw);
+                // Precompute SDG norms
+                sdgs.forEach(s => {
+                    if (s.embedding) {
+                        (s as any).norm = calculateNorm(s.embedding);
+                    }
+                });
             } catch (e) {
                 console.warn("SDG data not found");
             }
@@ -102,7 +113,8 @@ async function loadDataAsync() {
                             const j = JSON.parse(line);
                             journalsIndex.push({
                                 ...j,
-                                tokens: tokenize(j.content)
+                                tokens: tokenize(j.content),
+                                norm: j.embedding ? calculateNorm(j.embedding) : 0 // Precompute Norm
                             });
                         } catch (e) { }
                     }
@@ -116,7 +128,8 @@ async function loadDataAsync() {
                     const list = JSON.parse(raw);
                     journalsIndex = list.map((j: any) => ({
                         ...j,
-                        tokens: tokenize(j.content)
+                        tokens: tokenize(j.content),
+                        norm: j.embedding ? calculateNorm(j.embedding) : 0
                     }));
                 }
             }
@@ -157,13 +170,24 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
     const scores = new Array(journalsIndex.length);
     let count = 0;
 
-    for (let i = 0; i < journalsIndex.length; i++) {
-        const j = journalsIndex[i];
+    // Optimization: Pre-calculate query norm once
+    let queryNorm = 0;
+    if (embedding) {
+        queryNorm = calculateNorm(embedding);
+    }
+
+    // Optimization: Cache journalsIndex reference to local scope
+    const journals = journalsIndex;
+    const len = journals.length;
+
+    for (let i = 0; i < len; i++) {
+        const j = journals[i];
         if (excludedIds.has(j.id)) continue;
 
         let score = 0;
         if (embedding && j.embedding) {
-            score = cosineSimilarity(embedding, j.embedding);
+            // Use optimized Similarity
+            score = cosineSimilarityOptimized(embedding, j.embedding, queryNorm, j.norm);
         } else {
             // Jaccard Fallback
             score = calculateJaccard(inputTokens, j.tokens);
@@ -181,7 +205,7 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
 
     // Take Top K and map back to full objects
     const topJournals = validScores.slice(0, topK).map(item => {
-        const j = journalsIndex[item.index];
+        const j = journals[item.index];
         return { ...j, score: item.score };
     });
 
@@ -191,7 +215,9 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
         // Hybrid Score
         let semanticScore = 0;
         if (embedding && sdg.embedding) {
-            semanticScore = cosineSimilarity(embedding, sdg.embedding);
+            // Only use optimized if SDG has norm precomputed (we added that to loader)
+            const sdgNorm = (sdg as any).norm || calculateNorm(sdg.embedding);
+            semanticScore = cosineSimilarityOptimized(embedding, sdg.embedding, queryNorm, sdgNorm);
         }
 
         // Keyword Bonus
