@@ -223,6 +223,7 @@ def ingest():
             iterator_source = df_journals.itertuples(index=False)
 
         # Use the unified iterator
+        pending_records = []
         for row in iterator_source:
             # If coming from openpyxl, row is RowObject. If from pandas, it's namedtuple.
             # The attribute access logic below works for both!
