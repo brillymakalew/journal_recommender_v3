@@ -1,13 +1,28 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
 import AzureADProvider from "next-auth/providers/azure-ad";
 
 const authOptions: NextAuthOptions = {
     providers: [
-        AzureADProvider({
-            clientId: process.env.AZURE_AD_CLIENT_ID || "",
-            clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
-            tenantId: process.env.AZURE_AD_TENANT_ID,
-        }),
+        // AzureADProvider({
+        //     clientId: process.env.AZURE_AD_CLIENT_ID || "",
+        //     clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+        //     tenantId: process.env.AZURE_AD_TENANT_ID,
+        // }),
+        CredentialsProvider({
+            name: "Guest Access",
+            credentials: {
+                username: { label: "Username", type: "text", placeholder: "admin" },
+                password: { label: "Password", type: "password", placeholder: "admin" }
+            },
+            async authorize(credentials, req) {
+                // Simple dummy check
+                if (credentials?.username === "admin" && credentials?.password === "admin") {
+                    return { id: "1", name: "Guest Admin", email: "admin@journal.local" }
+                }
+                return null
+            }
+        })
     ],
     callbacks: {
         async signIn({ user, account, profile }) {
