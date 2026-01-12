@@ -44,10 +44,10 @@ const authOptions: NextAuthOptions = {
             return true;
         },
         async redirect({ url, baseUrl }) {
-            // Allows relative callback URLs
+            // Trust the client-provided callback URL (essential for VPS with no NEXTAUTH_URL set)
             if (url.startsWith("/")) return `${baseUrl}${url}`
-            // Allows callback URLs on the same origin
-            else if (new URL(url).origin === baseUrl) return url
+            // Allow any URL that starts with http/https
+            else if (url.startsWith("http")) return url
             return baseUrl
         }
     },
