@@ -89,7 +89,7 @@ def ingest():
     
     # 1. Load Existing Data from JSONL (Preferred for Resume)
     if os.path.exists(journals_jsonl_path):
-        print(f"Loading existing progress from {journals_jsonl_path}...")
+        print(f"Loading existing progress from {journals_jsonl_path}...", flush=True)
         try:
             with open(journals_jsonl_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -98,13 +98,13 @@ def ingest():
                             record = json.loads(line)
                             existing_journals[record['name']] = record
                         except: pass
-            print(f"Loaded {len(existing_journals)} existing records.")
+            print(f"Loaded {len(existing_journals)} existing records.", flush=True)
         except Exception as e:
-            print(f"Error reading JSONL: {e}")
+            print(f"Error reading JSONL: {e}", flush=True)
 
     # Fallback to JSON if JSONL empty/missing
     if not existing_journals and os.path.exists(journals_json_path):
-        print("Loading existing journals from legacy JSON...")
+        print("Loading existing journals from legacy JSON...", flush=True)
         with open(journals_json_path, "r", encoding="utf-8") as f:
             try:
                 loaded = json.load(f)
@@ -116,47 +116,48 @@ def ingest():
     asjc_map = {}
     asjc_path_file = os.path.join(RESOURCES_DIR, "ASJC1.xlsx")
     if os.path.exists(asjc_path_file):
-        print("Loading ASJC mapping...")
+        print("Loading ASJC mapping...", flush=True)
         df_asjc = pd.read_excel(asjc_path_file)
         for _, r in df_asjc.iterrows():
             code = str(r['Code']).strip()
             desc = str(r['Description']).strip() 
             asjc_map[code] = desc
+        print("ASJC mapping loaded.", flush=True)
 
     # 2. Load Excel Data (with CSV Caching)
     journals_path = os.path.join(RESOURCES_DIR, JOURNALS_FILE)
     journals_cache_path = os.path.join(RESOURCES_DIR, "journals_cache.csv")
     
     if os.path.exists(journals_path):
-        print(f"Loading Journal Data from {journals_path}...")
+        print(f"Loading Journal Data from {journals_path}...", flush=True)
         
         # Try loading from CSV cache first
         if os.path.exists(journals_cache_path):
             # Check modification times to ensure cache is fresh
             if os.path.getmtime(journals_cache_path) > os.path.getmtime(journals_path):
-                print("Found cached CSV. Loading fast...")
+                print("Found cached CSV. Loading fast...", flush=True)
                 try:
                     df_journals = pd.read_csv(journals_cache_path)
                     # Ensure strings
                     df_journals['All Science Journal Classification Codes (ASJC)'] = df_journals['All Science Journal Classification Codes (ASJC)'].astype(str)
                 except:
-                    print("Cache load failed, falling back to Excel.")
+                    print("Cache load failed, falling back to Excel.", flush=True)
                     df_journals = None
             else:
-                print("Cache outdated. Reloading from Excel...")
+                print("Cache outdated. Reloading from Excel...", flush=True)
                 df_journals = None
         else:
             df_journals = None
 
         # Fallback to Excel if no valid cache
         if df_journals is None:
-            print("Reading Excel file (this may take a few seconds)...")
+            print("Reading Excel file (this may take a few seconds)...", flush=True)
             df_journals = pd.read_excel(journals_path, usecols=[
                 'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
                 'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
             ])
             # Save cache for next time
-            print("Saving CSV cache for future runs...")
+            print("Saving CSV cache for future runs...", flush=True)
             df_journals.to_csv(journals_cache_path, index=False)
 
         df_journals = df_journals.dropna(subset=['Source Title'])
@@ -165,7 +166,7 @@ def ingest():
         pending_records = [] 
         final_list = [] # Keep track of everything for final JSON dump if needed
         
-        print(f"Total rows to process: {len(df_journals)}")
+        print(f"Total rows to process: {len(df_journals)}", flush=True)
         
         # Use itertuples for faster iteration
         for row in df_journals.itertuples(index=False):
