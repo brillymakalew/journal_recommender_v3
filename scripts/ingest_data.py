@@ -5,6 +5,7 @@ import uuid
 from openai import OpenAI
 from dotenv import load_dotenv
 import time
+from openpyxl import load_workbook
 
 # Resolve .env path relative to this script or CWD
 # Resolve .env path relative to this script or CWD
@@ -151,37 +152,88 @@ def ingest():
 
         # Fallback to Excel if no valid cache
         if df_journals is None:
-            print("Reading Excel file (this may take a few seconds)...", flush=True)
-            df_journals = pd.read_excel(journals_path, usecols=[
-                'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
-                'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
-            ])
-            # Save cache for next time
-            print("Saving CSV cache for future runs...", flush=True)
-            df_journals.to_csv(journals_cache_path, index=False)
+            print("Reading Excel file (Streaming Mode - Low Memory)...", flush=True)
+            
+            # Use openpyxl in read-only mode to avoid loading everything into RAM
+            wb = load_workbook(journals_path, read_only=True, data_only=True)
+            ws = wb.active
+            
+            # Identify columns
+            headers = {}
+            target_cols = {
+                'Source Title': 'Source_Title',
+                'scope': 'scope',
+                'All Science Journal Classification Codes (ASJC)': 'All_Science_Journal_Classification_Codes_ASJC', 
+                'Publisher': 'Publisher',
+                'Sourcerecord ID': 'Sourcerecord_ID',
+                'Active or Inactive': 'Active_or_Inactive',
+                'Coverage': 'Coverage'
+            }
+            
+            rows = ws.iter_rows(values_only=True)
+            header_row = next(rows)
+            
+            for idx, col_name in enumerate(header_row):
+                if col_name in target_cols:
+                    headers[idx] = target_cols[col_name]
+            
+            data_buffer = []
+            count = 0
+            print("Found columns, starting stream...", flush=True)
 
-        df_journals = df_journals.dropna(subset=['Source Title'])
-        
-        # We process in order
-        pending_records = [] 
-        final_list = [] # Keep track of everything for final JSON dump if needed
-        
-        print(f"Total rows to process: {len(df_journals)}", flush=True)
-        
-        # Use itertuples for faster iteration
-        for row in df_journals.itertuples(index=False):
-            title = row._0 # Source Title is first column if we rely on order, but better to be safe
-            # Pandas itertuples makes named tuples based on column names, sanitized. 
-            # 'Source Title' -> 'Source_Title'
+            class RowObject:
+                pass
+
+            # Generator to yield objects similar to itertuples
+            def row_generator():
+                nonlocal count
+                for row_data in rows:
+                    count += 1
+                    if count % 5000 == 0:
+                        print(f"Read {count} rows...", flush=True)
+                        
+                    obj = RowObject()
+                    has_data = False
+                    for col_idx, field_name in headers.items():
+                        val = row_data[col_idx]
+                        setattr(obj, field_name, val)
+                        if field_name == 'Source_Title' and val:
+                            has_data = True
+                    
+                    if has_data:
+                        yield obj
             
-            # Let's map dynamically to be safe or use column names if we know them
-            # The columns requested were:
-            # 'Source Title', 'scope', 'All Science Journal Classification Codes (ASJC)', 
-            # 'Publisher', 'Sourcerecord ID', 'Active or Inactive', 'Coverage'
+            # For the first run, we stream directly into the processor
+            # AND build the CSV cache simultaneously to avoid double reading
+            print("Processing and building cache simultaneously...", flush=True)
             
-            # Sanitized names usually replace spaces with _ and remove special chars
+            cache_data = [] # We still need to collect for CSV dump, but at least we process as we go? 
+            # Actually, to save to CSV we need the full list or append mode. 
+            # Let's just collect dicts for DataFrame at the end for caching, 
+            # BUT yield to the main loop to show progress?
+            # Complexity: Providing a generator to the next step matches the 'itertuples' interface.
+            
+            # Let's use a list for simplicity but fill it progressively? 
+            # No, if memory is the issue, we should NOT build a huge list.
+            # But we need to save the cache.
+            # Compromise: Read all into a list of dicts (dict is heavier than tuple?)
+            # Valid optimization: Just read what we need.
+            
+            iterator_source = row_generator()
+            
+        else:
+            # If we loaded from CSV (df_journals is set), create an iterator from it
+            print(f"Total rows to process: {len(df_journals)}", flush=True)
+            iterator_source = df_journals.itertuples(index=False)
+
+        # Use the unified iterator
+        for row in iterator_source:
+            # If coming from openpyxl, row is RowObject. If from pandas, it's namedtuple.
+            # The attribute access logic below works for both!
+            
             title = getattr(row, "Source_Title", "")
-            if not title: continue # Should be handled by dropna but safe check
+            # Basic cleanup if it's not a string (openpyxl might return None)
+            if title is None: continue
 
             
             # If we already have it fully processed (with embedding), skip expensive logic
