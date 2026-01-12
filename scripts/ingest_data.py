@@ -282,7 +282,9 @@ def ingest():
             content = f"{title}. {scope}. matches ASJC codes: {asjc_final}".strip()
             
             # Reuse ID if possible
-            rec_id = existing_journals[title]['id'] if title in existing_journals else str(uuid.uuid4())
+            # Since we entered this block, it means we don't have it in our "existing_names" set
+            # So we treat it as a new record.
+            rec_id = str(uuid.uuid4())
 
             record = {
                 "id": rec_id,
@@ -297,7 +299,7 @@ def ingest():
             
             pending_records.append(record)
 
-        print(f"Already processed: {len(final_list)}")
+        print(f"Pending processing: {len(pending_records)}", flush=True)
         print(f"Pending processing: {len(pending_records)}")
         
         # 3. Process Pending in Batches & SAVE INCREMENTALLY
