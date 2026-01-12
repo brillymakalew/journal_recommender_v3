@@ -32,10 +32,19 @@ export default function SDGResults({ results }: SDGResultsProps) {
         }
         try {
             const res = await fetch('/api/sdgs');
+            if (!res.ok) throw new Error("Failed to load SDGs");
             const data = await res.json();
-            setAllSDGs(data);
-            setIsAddingString(true);
-        } catch (e) { console.error(e); }
+            if (Array.isArray(data)) {
+                setAllSDGs(data);
+                setIsAddingString(true);
+            } else {
+                console.error("API returned non-array:", data);
+            }
+        } catch (e) {
+            console.error(e);
+            // Fallback? or just alert
+            alert("Could not load full SDG list. Please check connection.");
+        }
     };
 
     const toggleSDG = (id: number) => {
