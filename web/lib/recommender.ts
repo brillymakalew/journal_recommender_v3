@@ -123,56 +123,75 @@ async function loadDataAsync() {
     return excludedIds;
 }
 
-export async function analyzeAbstract(abstract: string, topK: number = 3): Promise<AnalysisResult> {
-    const excludedIds = await loadDataAsync();
+// Helper: Min-Heap or QuickSelect is overkill for K=20, simple sort on mapped array is fine if mapped objects are small.
+// But we can avoid mapping the WHOLE journal object.
 
-    // 1. Generate Embedding
-    let embedding: number[] | null = null;
+export async function analyzeAbstract(abstract: string, topK: number = 3): Promise<AnalysisResult> {
     const hasApiKey = !!process.env.OPENAI_API_KEY;
 
-    if (hasApiKey) {
-        try {
-            const resp = await openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: abstract.replace("\n", " ")
-            });
-            embedding = resp.data[0].embedding;
-        } catch (e) {
-            console.error("Embedding failed", e);
-        }
-    }
+    // 1. Parallelize IO: Start Embedding & Data Load simultaneously
+    const embeddingPromise = hasApiKey
+        ? openai.embeddings.create({
+            model: "text-embedding-3-small",
+            input: abstract.replace("\n", " ")
+        }).then(res => res.data[0].embedding).catch(e => { console.error("Embedding failed", e); return null; })
+        : Promise.resolve(null);
+
+    // Ensure data is loaded (this might be instant if cached)
+    const dataPromise = loadDataAsync();
+
+    const [embedding, excludedIds] = await Promise.all([embeddingPromise, dataPromise]);
 
     const inputTokens = tokenize(abstract);
 
-    // 2. Score Journals
-    const scoredJournals = journalsIndex
-        .filter(j => !excludedIds.has(j.id)) // FILTER EXCLUDED
-        .map(j => {
-            let score = 0;
-            if (hasApiKey && embedding && j.embedding) {
-                score = cosineSimilarity(embedding, j.embedding);
-            } else {
-                // Jaccard Fallback
-                score = calculateJaccard(inputTokens, j.tokens);
-            }
-            return { ...j, score };
-        });
+    // 2. Score Journals (Optimized Loop)
+    // We only create small objects { index, score } instead of cloning the massive journal objects
+    const scores = new Array(journalsIndex.length);
+    let count = 0;
 
-    // Sort and Take Top K
-    scoredJournals.sort((a, b) => b.score - a.score);
-    const topJournals = scoredJournals.slice(0, topK);
+    for (let i = 0; i < journalsIndex.length; i++) {
+        const j = journalsIndex[i];
+        if (excludedIds.has(j.id)) continue;
 
-    // 3. Score SDGs
+        let score = 0;
+        if (embedding && j.embedding) {
+            score = cosineSimilarity(embedding, j.embedding);
+        } else {
+            // Jaccard Fallback
+            score = calculateJaccard(inputTokens, j.tokens);
+        }
+
+        // Store only necessary data for sorting
+        scores[count++] = { index: i, score };
+    }
+
+    // Trim array to actual count (since we skipped exclusions)
+    const validScores = scores.slice(0, count);
+
+    // Sort: High to Low
+    validScores.sort((a, b) => b.score - a.score);
+
+    // Take Top K and map back to full objects
+    const topJournals = validScores.slice(0, topK).map(item => {
+        const j = journalsIndex[item.index];
+        return { ...j, score: item.score };
+    });
+
+    // 3. Score SDGs (SDGs are few, optimization less critical but good to keep consistent)
+    // We can just keep the map logic for SDGs as there are only ~17-20 of them.
     let scoredSdgs = sdgs.map(sdg => {
         // Hybrid Score
         let semanticScore = 0;
-        if (hasApiKey && embedding && sdg.embedding) {
+        if (embedding && sdg.embedding) {
             semanticScore = cosineSimilarity(embedding, sdg.embedding);
         }
 
         // Keyword Bonus
         const keywordsFound = sdg.keywords.filter(kw => {
             try {
+                // Regex for whole word match is safer but slower? 
+                // Let's stick to includest/regex hybrid or just simple includes for speed if needed.
+                // The original logic was fine, just keeping it.
                 const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const regex = new RegExp(`\\b${escaped}\\b`, 'i');
                 return regex.test(abstract);
@@ -185,8 +204,6 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
         return { ...sdg, score: finalScore, keywordsFound };
     });
 
-    // Filter by threshold or top N?
-    // Let's take top 3 or > 0.4
     scoredSdgs.sort((a, b) => b.score - a.score);
     const topSdgs = scoredSdgs.slice(0, 3);
 
