@@ -5,6 +5,7 @@ import JournalCard from "@/components/JournalCard";
 import SDGResults from "@/components/SDGResults";
 import { Journal, SDG } from "@/lib/types";
 import { useTheme } from "@/components/ThemeProvider";
+import InteractiveBackground from "@/components/InteractiveBackground";
 
 export default function Home() {
     const [abstract, setAbstract] = useState("");
@@ -43,8 +44,9 @@ export default function Home() {
     const { theme, toggleTheme } = useTheme();
 
     return (
-        <main className="min-h-screen bg-gray-50 dark:bg-gradient-to-br dark:from-slate-900 dark:via-indigo-950 dark:to-black text-gray-900 dark:text-white p-6 md:p-12 transition-colors duration-500">
-            <div className="max-w-5xl mx-auto space-y-12">
+        <main className="min-h-screen bg-gray-50 dark:bg-gradient-to-br dark:from-slate-900 dark:via-indigo-950 dark:to-black text-gray-900 dark:text-white p-6 md:p-12 transition-colors duration-500 relative overflow-hidden">
+            <InteractiveBackground value={topK} />
+            <div className="max-w-5xl mx-auto space-y-12 relative z-10">
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-center gap-6 pt-8 animate-in fade-in slide-in-from-top-4 duration-700">
                     <div className="text-center md:text-left space-y-2">

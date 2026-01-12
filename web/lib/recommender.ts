@@ -59,68 +59,74 @@ function calculateJaccard(setA: Set<string>, setB: Set<string>): number {
 }
 
 // Data Loader
+let loadingPromise: Promise<Set<string>> | null = null;
+
 async function loadDataAsync() {
-    // Load Exclusions
-    let excludedIds = new Set<string>();
-    try {
-        const exclPath = path.join(DATA_DIR, 'exclusions.json');
-        if (fs.existsSync(exclPath)) {
-            const raw = fs.readFileSync(exclPath, 'utf-8');
-            const list = JSON.parse(raw);
-            list.forEach((id: string) => excludedIds.add(id));
-        }
-    } catch (e) { console.warn("Exclusions load failed"); }
+    if (loadingPromise) return loadingPromise;
 
-    // Load SDGs
-    if (sdgs.length === 0) {
+    loadingPromise = (async () => {
+        console.log("Starting data load...");
+        // Load Exclusions
+        let excludedIds = new Set<string>();
         try {
-            const raw = fs.readFileSync(path.join(DATA_DIR, 'sdgs.json'), 'utf-8');
-            sdgs = JSON.parse(raw);
-        } catch (e) {
-            console.warn("SDG data not found");
+            const exclPath = path.join(DATA_DIR, 'exclusions.json');
+            if (fs.existsSync(exclPath)) {
+                const raw = fs.readFileSync(exclPath, 'utf-8');
+                const list = JSON.parse(raw);
+                list.forEach((id: string) => excludedIds.add(id));
+            }
+        } catch (e) { console.warn("Exclusions load failed"); }
+
+        // Load SDGs
+        if (sdgs.length === 0) {
+            try {
+                const raw = fs.readFileSync(path.join(DATA_DIR, 'sdgs.json'), 'utf-8');
+                sdgs = JSON.parse(raw);
+            } catch (e) {
+                console.warn("SDG data not found");
+            }
         }
-    }
 
-    // Load Journals (Streaming JSONL)
-    if (journalsIndex.length === 0) {
-        console.log("Loading journals.jsonl...");
-        const jsonlPath = path.join(DATA_DIR, 'journals.jsonl');
+        // Load Journals (Streaming JSONL)
+        if (journalsIndex.length === 0) {
+            console.log("Loading journals.jsonl...");
+            const jsonlPath = path.join(DATA_DIR, 'journals.jsonl');
 
-        if (fs.existsSync(jsonlPath)) {
-            const fileStream = fs.createReadStream(jsonlPath);
-            const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+            if (fs.existsSync(jsonlPath)) {
+                const fileStream = fs.createReadStream(jsonlPath);
+                const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
-            for await (const line of rl) {
-                if (line.trim()) {
-                    try {
-                        const j = JSON.parse(line);
-                        // Store minimal needed in memory? 
-                        // Actually we need embeddings. 48k * 1536 floats is ~300MB RAM. Fine.
-                        // We also need tokens for fallback.
-                        journalsIndex.push({
-                            ...j,
-                            tokens: tokenize(j.content)
-                        });
-                    } catch (e) { }
+                for await (const line of rl) {
+                    if (line.trim()) {
+                        try {
+                            const j = JSON.parse(line);
+                            journalsIndex.push({
+                                ...j,
+                                tokens: tokenize(j.content)
+                            });
+                        } catch (e) { }
+                    }
+                }
+            } else {
+                // Fallback to JSON
+                const jsonPath = path.join(DATA_DIR, 'journals.json');
+                if (fs.existsSync(jsonPath)) {
+                    console.log("Fallback to legacy JSON load");
+                    const raw = fs.readFileSync(jsonPath, 'utf-8');
+                    const list = JSON.parse(raw);
+                    journalsIndex = list.map((j: any) => ({
+                        ...j,
+                        tokens: tokenize(j.content)
+                    }));
                 }
             }
-        } else {
-            // Fallback to JSON
-            const jsonPath = path.join(DATA_DIR, 'journals.json');
-            if (fs.existsSync(jsonPath)) {
-                console.log("Fallback to legacy JSON load");
-                const raw = fs.readFileSync(jsonPath, 'utf-8');
-                const list = JSON.parse(raw);
-                journalsIndex = list.map((j: any) => ({
-                    ...j,
-                    tokens: tokenize(j.content)
-                }));
-            }
+            console.log(`Loaded ${journalsIndex.length} journals.`);
         }
-        console.log(`Loaded ${journalsIndex.length} journals.`);
-    }
 
-    return excludedIds;
+        return excludedIds;
+    })();
+
+    return loadingPromise;
 }
 
 // Helper: Min-Heap or QuickSelect is overkill for K=20, simple sort on mapped array is fine if mapped objects are small.
@@ -128,8 +134,9 @@ async function loadDataAsync() {
 
 export async function analyzeAbstract(abstract: string, topK: number = 3): Promise<AnalysisResult> {
     const hasApiKey = !!process.env.OPENAI_API_KEY;
+    console.log(`Analyzing abstract. Length: ${abstract.length}. API Key present: ${hasApiKey}`);
 
-    // 1. Parallelize IO: Start Embedding & Data Load simultaneously
+    // 1. Parallelize IO
     const embeddingPromise = hasApiKey
         ? openai.embeddings.create({
             model: "text-embedding-3-small",
@@ -137,10 +144,11 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
         }).then(res => res.data[0].embedding).catch(e => { console.error("Embedding failed", e); return null; })
         : Promise.resolve(null);
 
-    // Ensure data is loaded (this might be instant if cached)
+    // Ensure data is loaded
     const dataPromise = loadDataAsync();
 
     const [embedding, excludedIds] = await Promise.all([embeddingPromise, dataPromise]);
+    console.log(`Data loaded. Journals: ${journalsIndex.length}. Embedding generated: ${!!embedding}`);
 
     const inputTokens = tokenize(abstract);
 
