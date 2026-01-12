@@ -5,7 +5,12 @@ import OpenAI from 'openai';
 import { Journal, SDG, AnalysisResult } from './types';
 
 // Singleton Data Cache
-export let journalsIndex: any[] = [];
+// Optimization: Matrix-based storage
+const DIMENSIONS = 1536;
+const MAX_JOURNALS = 100000; // Cap at 100k to reserve ~600MB RAM for the Float32Array
+export let journalMatrix: Float32Array | null = null;
+export let journalMetadata: any[] = [];
+export let journalCount = 0; // Actual loaded count
 let sdgs: SDG[] = [];
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -16,7 +21,7 @@ export async function ensureDataLoaded() {
 }
 
 export function getJournals() {
-    return journalsIndex;
+    return journalMetadata.slice(0, journalCount);
 }
 
 // OpenAI for embeddings
@@ -25,21 +30,10 @@ const openai = new OpenAI({
 });
 
 // Helper: Calculate Vector Norm (Magnitude)
-function calculateNorm(vec: number[]): number {
+function calculateNorm(vec: number[] | Float32Array): number {
     let sum = 0;
     for (let i = 0; i < vec.length; i++) sum += vec[i] * vec[i];
     return Math.sqrt(sum);
-}
-
-// Optimized Cosine: Uses precomputed normB
-function cosineSimilarityOptimized(vecA: number[], vecB: number[], normA: number, normB: number): number {
-    let dot = 0;
-    // Unrolling loop slightly might help V8, but simple loop is usually good enough.
-    // Length is 1536 for OpenAI embeddings.
-    for (let i = 0; i < vecA.length; i++) {
-        dot += vecA[i] * vecB[i];
-    }
-    return dot / (normA * normB);
 }
 
 // Tokenizer
@@ -70,7 +64,7 @@ async function loadDataAsync() {
     if (loadingPromise) return loadingPromise;
 
     loadingPromise = (async () => {
-        console.log("Starting data load...");
+        console.log("Starting data load (Matrix Mode)...");
         // Load Exclusions
         let excludedIds = new Set<string>();
         try {
@@ -98,8 +92,14 @@ async function loadDataAsync() {
             }
         }
 
-        // Load Journals (Streaming JSONL)
-        if (journalsIndex.length === 0) {
+        // Load Journals (Streaming JSONL + Matrix Fill)
+        if (!journalMatrix) {
+            console.log("Allocating Matrix...");
+            // Allocate 600MB buffer for vectors
+            journalMatrix = new Float32Array(MAX_JOURNALS * DIMENSIONS);
+            journalCount = 0;
+            journalMetadata = new Array(MAX_JOURNALS);
+
             console.log("Loading journals.jsonl...");
             const jsonlPath = path.join(DATA_DIR, 'journals.jsonl');
 
@@ -110,59 +110,57 @@ async function loadDataAsync() {
                 for await (const line of rl) {
                     if (line.trim()) {
                         try {
-                            const j = JSON.parse(line);
-                            // MEMORY OPTIMIZATION: Drop huge text fields
-                            delete j.content;
-                            delete j.abstract; // if exists
+                            if (journalCount >= MAX_JOURNALS) break;
 
-                            journalsIndex.push({
-                                ...j,
-                                tokens: tokenize(j.content || ""), // Generate tokens first
-                                norm: j.embedding ? calculateNorm(j.embedding) : 0
-                            });
+                            const j = JSON.parse(line);
+
+                            // 1. Store Embedding in Matrix
+                            if (j.embedding && j.embedding.length === DIMENSIONS) {
+                                const offset = journalCount * DIMENSIONS;
+                                for (let k = 0; k < DIMENSIONS; k++) {
+                                    journalMatrix[offset + k] = j.embedding[k];
+                                }
+                            }
+
+                            // 2. Store minimal metadata (Memory Diet)
+                            journalMetadata[journalCount] = {
+                                id: j.id,
+                                name: j.name,
+                                publisher: j.publisher,
+                                coverage: j.coverage,
+                                scope: j.scope || "", // Keep scope for display? Or maybe drop if too huge? User needs it for UI.
+                                link: j.link,
+                                asjc: j.asjc,
+                                tokens: tokenize(j.content || ""), // Still needed for fallback? If embedding exists we prioritize it.
+                                norm: j.embedding ? calculateNorm(j.embedding) : 0,
+                                hasEmbedding: !!j.embedding
+                            };
+
+                            journalCount++;
+
                         } catch (e) { }
                     }
                 }
-            } else {
-                // Fallback to JSON
-                const jsonPath = path.join(DATA_DIR, 'journals.json');
-                if (fs.existsSync(jsonPath)) {
-                    console.log("Fallback to legacy JSON load");
-                    const raw = fs.readFileSync(jsonPath, 'utf-8');
-                    const list = JSON.parse(raw);
-                    journalsIndex = list.map((j: any) => {
-                        const tokens = tokenize(j.content || "");
-                        // MEMORY OPTIMIZATION
-                        const { content, abstract, ...rest } = j;
-                        return {
-                            ...rest,
-                            tokens,
-                            norm: j.embedding ? calculateNorm(j.embedding) : 0
-                        };
-                    });
-                }
             }
-            console.log(`Loaded ${journalsIndex.length} journals.`);
+            console.log(`Loaded ${journalCount} journals into Matrix.`);
         }
 
         return excludedIds;
     })().catch(e => {
         console.error("Data load failed:", e);
-        loadingPromise = null; // Reset lock so we can retry
+        loadingPromise = null;
         throw e;
     });
 
     return loadingPromise;
 }
 
-// Helper: Min-Heap or QuickSelect is overkill for K=20, simple sort on mapped array is fine if mapped objects are small.
-// But we can avoid mapping the WHOLE journal object.
-
 export async function analyzeAbstract(abstract: string, topK: number = 3): Promise<AnalysisResult> {
     const hasApiKey = !!process.env.OPENAI_API_KEY;
+    console.time("Analysis");
     console.log(`Analyzing abstract. Length: ${abstract.length}. API Key present: ${hasApiKey}`);
 
-    // 1. Parallelize IO
+    // 1. Generate Input Embedding
     const embeddingPromise = hasApiKey
         ? openai.embeddings.create({
             model: "text-embedding-3-small",
@@ -174,14 +172,14 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
     const dataPromise = loadDataAsync();
 
     const [embedding, excludedIds] = await Promise.all([embeddingPromise, dataPromise]);
-    console.log(`Data loaded. Journals: ${journalsIndex.length}. Embedding generated: ${!!embedding}`);
+    console.log(`Data loaded. Journals: ${journalCount}. Embedding generated: ${!!embedding}`);
 
     const inputTokens = tokenize(abstract);
 
-    // 2. Score Journals (Optimized Loop)
-    // We only create small objects { index, score } instead of cloning the massive journal objects
-    const scores = new Array(journalsIndex.length);
-    let count = 0;
+    // 2. Score Journals (Matrix Scan)
+    const scores = new Array(journalCount);
+    const matrix = journalMatrix!; // Safe assertion if loaded
+    const metadata = journalMetadata;
 
     // Optimization: Pre-calculate query norm once
     let queryNorm = 0;
@@ -189,56 +187,68 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
         queryNorm = calculateNorm(embedding);
     }
 
-    // Optimization: Cache journalsIndex reference to local scope
-    const journals = journalsIndex;
-    const len = journals.length;
+    // High Performance Loop
+    // Accessing typed array linearly is much faster
+    let validCount = 0;
 
-    for (let i = 0; i < len; i++) {
-        const j = journals[i];
-        if (excludedIds.has(j.id)) continue;
+    // Cache standard for loop vars
+    const useSemantic = !!(embedding && matrix);
+
+    console.time("ScoringLoop");
+    for (let i = 0; i < journalCount; i++) {
+        const meta = metadata[i];
+        if (excludedIds.has(meta.id)) continue;
 
         let score = 0;
-        if (embedding && j.embedding) {
-            // Use optimized Similarity
-            score = cosineSimilarityOptimized(embedding, j.embedding, queryNorm, j.norm);
+
+        if (useSemantic && meta.hasEmbedding) {
+            // Optimized Dot Product against Flat Matrix
+            let dot = 0;
+            const offset = i * DIMENSIONS;
+
+            // Manual loop is often faster than subarray for small overhead
+            for (let k = 0; k < DIMENSIONS; k++) {
+                dot += embedding![k] * matrix[offset + k];
+            }
+
+            score = dot / (queryNorm * meta.norm);
         } else {
             // Jaccard Fallback
-            score = calculateJaccard(inputTokens, j.tokens);
+            score = calculateJaccard(inputTokens, meta.tokens);
         }
 
-        // Store only necessary data for sorting
-        scores[count++] = { index: i, score };
+        // Store result
+        scores[validCount++] = { index: i, score };
     }
+    console.timeEnd("ScoringLoop");
 
-    // Trim array to actual count (since we skipped exclusions)
-    const validScores = scores.slice(0, count);
+    // Trim
+    const validScores = scores.slice(0, validCount);
 
     // Sort: High to Low
     validScores.sort((a, b) => b.score - a.score);
 
     // Take Top K and map back to full objects
     const topJournals = validScores.slice(0, topK).map(item => {
-        const j = journals[item.index];
-        return { ...j, score: item.score };
+        const meta = metadata[item.index];
+        return { ...meta, score: item.score };
     });
 
-    // 3. Score SDGs (SDGs are few, optimization less critical but good to keep consistent)
-    // We can just keep the map logic for SDGs as there are only ~17-20 of them.
+    // 3. Score SDGs (SDGs are few, optimization less critical)
     let scoredSdgs = sdgs.map(sdg => {
         // Hybrid Score
         let semanticScore = 0;
         if (embedding && sdg.embedding) {
-            // Only use optimized if SDG has norm precomputed (we added that to loader)
             const sdgNorm = (sdg as any).norm || calculateNorm(sdg.embedding);
-            semanticScore = cosineSimilarityOptimized(embedding, sdg.embedding, queryNorm, sdgNorm);
+            // Standard dot product for SDG (not in matrix)
+            let dot = 0;
+            for (let k = 0; k < DIMENSIONS; k++) dot += embedding![k] * sdg.embedding[k];
+            semanticScore = dot / (queryNorm * sdgNorm);
         }
 
         // Keyword Bonus
         const keywordsFound = sdg.keywords.filter(kw => {
             try {
-                // Regex for whole word match is safer but slower? 
-                // Let's stick to includest/regex hybrid or just simple includes for speed if needed.
-                // The original logic was fine, just keeping it.
                 const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const regex = new RegExp(`\\b${escaped}\\b`, 'i');
                 return regex.test(abstract);
@@ -254,6 +264,7 @@ export async function analyzeAbstract(abstract: string, topK: number = 3): Promi
     scoredSdgs.sort((a, b) => b.score - a.score);
     const topSdgs = scoredSdgs.slice(0, 3);
 
+    console.timeEnd("Analysis");
     return {
         journals: topJournals,
         sdgs: topSdgs

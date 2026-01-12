@@ -18,8 +18,11 @@ export default function SDGResults({ results }: SDGResultsProps) {
     const [isAddingString, setIsAddingString] = useState(false);
     const [viewingKeywords, setViewingKeywords] = useState<number | null>(null);
 
-    // Combine prop results with manually added ones
-    const displayList = [...results, ...extraSDGs].slice(0, 4); // Keep layout neat
+    // Combine prop results with manually added ones, ensuring NO duplicates (Key Collision Fix)
+    const displayList = [
+        ...results,
+        ...extraSDGs.filter(e => !results.some(r => r.id === e.id))
+    ].slice(0, 4);
 
     // Fetch all SDGs once for the picker
     const loadAllSDGs = async () => {
