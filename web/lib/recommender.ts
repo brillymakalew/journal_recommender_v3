@@ -111,10 +111,14 @@ async function loadDataAsync() {
                     if (line.trim()) {
                         try {
                             const j = JSON.parse(line);
+                            // MEMORY OPTIMIZATION: Drop huge text fields
+                            delete j.content;
+                            delete j.abstract; // if exists
+
                             journalsIndex.push({
                                 ...j,
-                                tokens: tokenize(j.content),
-                                norm: j.embedding ? calculateNorm(j.embedding) : 0 // Precompute Norm
+                                tokens: tokenize(j.content || ""), // Generate tokens first
+                                norm: j.embedding ? calculateNorm(j.embedding) : 0
                             });
                         } catch (e) { }
                     }
@@ -126,11 +130,16 @@ async function loadDataAsync() {
                     console.log("Fallback to legacy JSON load");
                     const raw = fs.readFileSync(jsonPath, 'utf-8');
                     const list = JSON.parse(raw);
-                    journalsIndex = list.map((j: any) => ({
-                        ...j,
-                        tokens: tokenize(j.content),
-                        norm: j.embedding ? calculateNorm(j.embedding) : 0
-                    }));
+                    journalsIndex = list.map((j: any) => {
+                        const tokens = tokenize(j.content || "");
+                        // MEMORY OPTIMIZATION
+                        const { content, abstract, ...rest } = j;
+                        return {
+                            ...rest,
+                            tokens,
+                            norm: j.embedding ? calculateNorm(j.embedding) : 0
+                        };
+                    });
                 }
             }
             console.log(`Loaded ${journalsIndex.length} journals.`);
